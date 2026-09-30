@@ -1,0 +1,10 @@
+pwd
+uname
+uname -a
+uname -wrongoption
+ls
+cd /
+ls -a
+cd non_existent_dir
+tail -n 3 non_existent_file.txt
+
