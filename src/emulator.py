@@ -1,7 +1,6 @@
 import argparse
 import csv
 import os
-import sys
 import tkinter as tk
 import zipfile
 from datetime import datetime
@@ -89,7 +88,6 @@ class TerminalEmulator:
             pass
     def handle_keypress(self, event):
         """Обрабатывает нажатия клавиш пользователем, защищая промпт."""
-        # if self.is_running_script: return "break"
         if event.keysym == "Return":
             start_idx = self.input_start_index
             user_input = self.terminal.get(start_idx, tk.END).strip()
@@ -118,33 +116,33 @@ class TerminalEmulator:
             self.vfs_files["/"] = {"type": "dir", "owner": "root"}
             with zipfile.ZipFile(self.vfs_path, "r") as archive:
                 for name in archive.namelist():
-                    norm = name.replace("\\", "/")
-                    parts = [p for p in norm.split("/") if p]
-                    curr = ""
-                    for i, part in enumerate(parts):
-                        curr = curr + "/" + part
-                        if curr not in self.vfs_files:
-                            if i == len(parts) - 1 and not name.endswith("/"):
-                                try:
-                                    data = archive.read(name)
-                                    content = data.decode(
-                                        "utf-8", errors="replace"
-                                    )
-                                except Exception:
-                                    content = "[Binary Data]"
-                                self.vfs_files[curr] = {
-                                    "type": "file",
-                                    "content": content,
-                                    "owner": "root",
-                                }
-                            else:
-                                self.vfs_files[curr] = {
-                                    "type": "dir",
-                                    "owner": "root",
-                                }
+                    self._process_zip_entry(archive, name)
             self.print_text("VFS successfully loaded into memory.\n\n")
         except Exception as e:
             self.print_text(f"VFS Error: {e}\n\n")
+
+    def _process_zip_entry(self, archive, name):
+        """Вспомогательный метод для обработки одной записи в архиве."""
+        norm = name.replace("\\", "/")
+        parts = [p for p in norm.split("/") if p]
+        curr = ""
+        for i, part in enumerate(parts):
+            curr = curr + "/" + part
+            if curr in self.vfs_files:
+                continue
+            if i == len(parts) - 1 and not name.endswith("/"):
+                try:
+                    data = archive.read(name)
+                    content = data.decode("utf-8", errors="replace")
+                except Exception:
+                    content = "[Binary Data]"
+                self.vfs_files[curr] = {
+                    "type": "file",
+                    "content": content,
+                    "owner": "root",
+                }
+            else:
+                self.vfs_files[curr] = {"type": "dir", "owner": "root"}
 
     def _resolve_path(self, target_path):
         """Преобразует относительный путь в абсолютный виртуальный путь."""
@@ -266,12 +264,32 @@ class TerminalEmulator:
         if err:
             return err
 
-        target_dir = self._resolve_path(path_arg) if path_arg else self.current_path
-        if target_dir not in self.vfs_files or self.vfs_files[target_dir]["type"] != "dir":
+        target_dir = (
+            self._resolve_path(path_arg) if path_arg else self.current_path
+        )
+        if (
+            target_dir not in self.vfs_files 
+            or self.vfs_files[target_dir]["type"] != "dir"
+        ):
             err = f"ls: cannot access '{path_arg}': No such directory"
             self.print_text(f"{err}\n")
             return err
 
+        items = self._collect_ls_items(target_dir, use_long)
+        if show_all:
+            dots = (
+                ["drwxr-xr-x root .", "drwxr-xr-x root .."] 
+                if use_long else [".", ".."]
+            )
+            items = dots + items
+
+        if items:
+            delim = "\n" if use_long else "  "
+            self.print_text(delim.join(sorted(items)) + "\n")
+        return ""
+
+    def _collect_ls_items(self, target_dir, use_long):
+        """Собирает элементы директории для команды ls."""
         items = []
         for k in self.vfs_files.keys():
             if k == "/":
@@ -281,18 +299,14 @@ class TerminalEmulator:
                 name = k.split("/")[-1]
                 if use_long:
                     owner = self.vfs_files[k].get("owner", "root")
-                    t_char = "d" if self.vfs_files[k]["type"] == "dir" else "-"
+                    t_char = (
+                        "d" if self.vfs_files[k]["type"] == "dir" else "-"
+                    )
                     items.append(f"{t_char}rwxr-xr-x {owner} {name}")
                 else:
                     items.append(name)
+        return items
 
-        if show_all:
-            dots = ["drwxr-xr-x root .", "drwxr-xr-x root .."] if use_long else [".", ".."]
-            items = dots + items
-
-        if items:
-            self.print_text(("\n" if use_long else "  ").join(sorted(items)) + "\n")
-        return ""
 
     def _parse_ls_args(self, args):
         """Парсит входящие аргументы для команды ls."""
@@ -339,14 +353,15 @@ class TerminalEmulator:
 
     def _parse_tail_args(self, args):
         """Парсит входящие аргументы для команды tail."""
+        two=2
         num_lines, file_arg, i = DEFAULT_TAIL_LINES, None, 0
         while i < len(args):
             arg = args[i]
             if arg.startswith("-n"):
-                val = arg[2:] if len(arg) > 2 else (
+                val = arg[2:] if len(arg) > two else (
                     args[i + 1] if i + 1 < len(args) else ""
                 )
-                if len(arg) == 2:
+                if len(arg) == two:
                     i += 1
                 if val.isdigit():
                     num_lines = int(val)
@@ -390,15 +405,14 @@ class TerminalEmulator:
 
     def _cmd_chown(self, args):
         """Изменяет владельца файла или директории в памяти VFS."""
-        if len(args) < 2:
+        two = 2
+        if len(args) < two:
             err = "chown: missing operand"
             self.print_text(f"{err}\n")
             return err
             
-        # ИСПРАВЛЕНИЕ: берем строго первый аргумент как имя владельца
         new_owner = args[0]
         
-        # Все остальные аргументы — это пути к файлам/папкам
         for target in args[1:]:
             resolved = self._resolve_path(target)
             if resolved in self.vfs_files:
@@ -446,10 +460,10 @@ class TerminalEmulator:
 
 
 def main():
+    """Точка входа. Парсит аргументы запуска ОС и стартует GUI."""
     root = tk.Tk()
     TerminalEmulator(root, vfs_path="deep_root.zip", log_path="terminal_log.csv", script_path="tests/start_script.txt")
     root.mainloop()
-    """Точка входа. Парсит аргументы запуска ОС и стартует GUI."""
     parser = argparse.ArgumentParser(description="UNIX Shell Emulator")
     parser.add_argument("--vfs", required=True)
     parser.add_argument("--log", required=True)
